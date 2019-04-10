@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# rclone_jobber.sh version 1.5.3
+# rclone_jobber.sh version 1.5.1
 # Tutorial, backup-job examples, and source code at https://github.com/wolfv6/rclone_jobber
 # Logging options are headed by "# set log".  Details are in the tutorial's "Logging options" section.
 
@@ -23,23 +23,27 @@ move_old_files_to="$3" #move_old_files_to is one of:
 options="$4"           #rclone options like "--filter-from=filter_patterns --checksum --log-level="INFO" --dry-run"
                        #do not put these in options: --backup-dir, --suffix, --log-file
 job_name="$5"          #job_name="$(basename $0)"
-monitoring_URL="$6"    #cron monitoring service URL to send email if cron failure or other error prevented back up
+hostname="$6"           #cron monitoring service URL to send email if cron failure or other error prevented back up
+
+backup_remote="$7"	# Specifying a poath for the backup directory
+
+log_filename="${8:-rclone-backup.log}"  #Specification of logfile name
+
+work_dir="$9" # Defining work dir (usually /opt/backup/ for Unix systems)
 
 ################################ set variables ###############################
 # $new is the directory name of the current snapshot
-# $timestamp is time that old file was moved out of new (not the time file was copied from source)
+# $timestamp is time that old file was moved out of new (not time file was copied from source)
 new="last_snapshot"
 timestamp="$(date +%F_%T)"
 #timestamp="$(date +%F_%H%M%S)"  #time w/o colons if thumb drive is FAT format, which does not allow colons in file name
 
 # set log_file path
-path="$(realpath "$0")"                 #path of this script
-log_file="${path%.*}.log"               #replace path extension with "log"
+log_file="$log_filename"               #replace path extension with "log"
 #log_file="/var/log/rclone_jobber.log"  #for Logrotate
 
 # set log_option for rclone
 log_option="--log-file=$log_file"       #log to log_file
-#log_option="--syslog"                  #log to systemd journal
 
 ################################## functions #################################
 send_to_log()
@@ -60,53 +64,53 @@ print_message()
 
     echo "$message"
     send_to_log "$(date +%F_%T) $message"
-    warning_icon="/usr/share/icons/Adwaita/32x32/emblems/emblem-synchronizing.png"   #path in Fedora 28
-    # notify-send is a popup notification on most Linux desktops, install libnotify-bin
-    command -v notify-send && notify-send --urgency critical --icon "$warning_icon" "$message"
+    #$work_dir/./pushbullet.sh "" "$host Backup Message" $urgency "$urgency - $msg - $message"
+    #warning_icon="/usr/share/icons/Adwaita/32x32/emblems/emblem-synchronizing.png"   #path in Fedora 28
+    ## notify-send is a popup notification on most Linux desktops, install libnotify-bin
+    #command -v notify-send && notify-send --urgency critical --icon "$warning_icon" "$message"
 }
 
 ################################# range checks ################################
-# if source is empty string
 if [ -z "$source" ]; then
     print_message "ERROR" "aborted because source is empty string."
     exit 1
 fi
 
-# if dest is empty string
 if [ -z "$dest" ]; then
     print_message "ERROR" "aborted because dest is empty string."
     exit 1
 fi
 
 # if source is empty
-if ! ( rclone ls -q $source | grep -q . ); then
+if ! ( ls -1qA $source | grep -q . ); then
     print_message "ERROR" "aborted because source is empty."
     exit 1
 fi
 
-# if job is already running (maybe previous run hasn't finish)
-if pidof -o $PPID -x "$job_name"; then
-    print_message "WARNING" "aborted because it is already running."
-    exit 1
-fi
+# #if job is already running (maybe previous run didn't finish)
+# if pidof -o $PPID -x "$job_name"; then
+#     print_message "WARNING" "aborted because it is already running."
+#     exit 1
+# fi
 
 ############################### move_old_files_to #############################
 # deleted or changed files are removed or moved, depending on value of move_old_files_to variable
 # default move_old_files_to="" will remove deleted or changed files from backup
 if [ "$move_old_files_to" = "dated_directory" ]; then
     # move deleted or changed files to archive/$(date +%Y)/$timestamp directory
-    backup_dir="--backup-dir=$dest/archive/$(date +%Y)/$timestamp"
+    backup_dir="--backup-dir=$backup_remote/$(date +%Y)/$timestamp"
 elif [ "$move_old_files_to" = "dated_files" ]; then
     # move deleted or changed files to old directory, and append _$timestamp to file name
-    backup_dir="--backup-dir=$dest/old_files --suffix=_$timestamp"
+    backup_dir="--backup-dir=$backup_remote --suffix=_$timestamp"
 elif [ "$move_old_files_to" != "" ]; then
     print_message "WARNING" "Parameter move_old_files_to=$move_old_files_to, but should be dated_directory or dated_files.\
   Moving old data to dated_directory."
-    backup_dir="--backup-dir=$dest/$timestamp"
+    backup_dir="--backup-dir=$backup_remote/$timestamp"
 fi
 
 ################################### back up ##################################
-cmd="rclone sync $source $dest/$new $backup_dir $log_option $options"
+cmd="rclone sync $source $dest $backup_dir $log_option $options"
+#cmd="uptime"
 
 # progress message
 echo "Back up in progress $timestamp $job_name"
@@ -122,15 +126,11 @@ exit_code=$?
 ############################ confirmation and logging ########################
 if [ "$exit_code" -eq 0 ]; then            #if no errors
     confirmation="$(date +%F_%T) completed $job_name"
-    echo "$confirmation"
-    send_to_log "$confirmation"
-    send_to_log ""
-    if [ ! -z "$monitoring_URL" ]; then
-        wget $monitoring_URL -O /dev/null
-    fi
+    # Triggering pushbullet notification information in order  $Channel $Title $Message
+    $work_dir./pushbullet.sh "" "$hostname Backup Succeeded" "$hostname $job_name $confirmation"
     exit 0
 else
     print_message "ERROR" "failed.  rclone exit_code=$exit_code"
-    send_to_log ""
+    $work_dir./pushbullet.sh "" "$hostname ERROR $0 Failed" "$(date +%F_%T) : $job_name The backup failed"
     exit 1
 fi
